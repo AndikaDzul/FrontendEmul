@@ -3,18 +3,15 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 
-// ================= CONFIG BACKEND =================
-const backendUrl = 'https://backend-test-n4bo.vercel.app' // URL Vercel Backend
+const backendUrl = 'https://backend-test-n4bo.vercel.app'
 
-// ================= REACTIVE STATE =================
 const router = useRouter()
 const username = ref('')
 const password = ref('')
-const role = ref('guru') // default guru
+const role = ref('guru')
 const error = ref('')
-const loading = ref(false) // overlay loading
+const loading = ref(false)
 
-// ================= LOGIN FUNCTION =================
 const handleLogin = async () => {
   error.value = ''
 
@@ -23,19 +20,33 @@ const handleLogin = async () => {
     return
   }
 
-  loading.value = true // tampilkan overlay
+  loading.value = true
 
   try {
-    const endpoint = role.value === 'guru' ? '/teachers/login' : '/students/login'
+    const endpoint =
+      role.value === 'guru'
+        ? '/teachers/login'
+        : '/students/login'
 
-    const response = await axios.post(`${backendUrl}${endpoint}`, {
+    const { data } = await axios.post(`${backendUrl}${endpoint}`, {
       email: username.value,
       password: password.value
     })
 
-    const data = response.data
+    /* ================= SESSION ================= */
+    // Hapus hanya data login lama, jangan hapus data absensi
+    localStorage.removeItem('isLoggedIn')
+    localStorage.removeItem('role')
+    localStorage.removeItem('token')
+    localStorage.removeItem('teacherId')
+    localStorage.removeItem('teacherName')
+    localStorage.removeItem('teacherMapel')
+    localStorage.removeItem('studentId')
+    localStorage.removeItem('studentName')
+    localStorage.removeItem('studentNis')
+    localStorage.removeItem('studentClass')
 
-    // ================= SIMPAN SESSION =================
+    // Set session baru
     localStorage.setItem('isLoggedIn', 'true')
     localStorage.setItem('role', role.value)
     localStorage.setItem('token', data.token || '')
@@ -43,26 +54,26 @@ const handleLogin = async () => {
     if (role.value === 'guru') {
       localStorage.setItem('teacherId', data.teacherId)
       localStorage.setItem('teacherName', data.name)
-      localStorage.setItem('teacherRole', 'GURU')
       localStorage.setItem('teacherMapel', data.mapel || '')
+      router.push('/dashboard')
     } else {
       localStorage.setItem('studentId', data.studentId)
       localStorage.setItem('studentName', data.name)
-      localStorage.setItem('studentClass', data.class || '')
+      localStorage.setItem('studentNis', data.nis)
+      localStorage.setItem('studentClass', data.class)
+      router.push('/student-dashboard')
     }
 
-    // ================= REDIRECT =================
-    router.push(role.value === 'guru' ? '/dashboard' : '/student-dashboard')
-
   } catch (err) {
-    console.error(err)
-    error.value = err.response?.data?.message || 'Login gagal, coba lagi'
+    error.value = err.response?.data?.message || 'Login gagal'
     alert(error.value)
   } finally {
-    loading.value = false // sembunyikan overlay
+    loading.value = false
   }
 }
 </script>
+
+
 
 <template>
   <div class="login-page">

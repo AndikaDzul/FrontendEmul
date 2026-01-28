@@ -8,179 +8,165 @@ const router = useRouter()
 const backendUrl = 'https://backend-test-n4bo.vercel.app'
 
 /* ================= USER ================= */
-const guru = ref({ name:'', role:'', mapel:'' })
-
-/* ================= DATA ================= */
-const totalHadir = ref(0)
-const attendanceHistory = ref([])
-const loadingHistory = ref(false)
-
-/* ================= TOAST NOTIF ================= */
-const toast = ref({
-  show:false,
-  message:'',
-  type:'success'
+const siswa = ref({
+  name: '',
+  nis: '',
+  kelas: ''
 })
 
-const showToast = (message, type='success') => {
-  toast.value = { show:true, message, type }
+/* ================= DATA ================= */
+const attendanceHistory = ref([])
+const totalHadir = ref(0)
+const loading = ref(false)
+
+/* ================= QR ================= */
+const qrVisible = ref(false)
+let html5QrCode = null
+let scanning = false // 🔐 prevent double scan
+
+/* ================= TOAST ================= */
+const toast = ref({ show:false, msg:'', type:'success' })
+const showToast = (msg, type='success') => {
+  toast.value = { show:true, msg, type }
   setTimeout(() => toast.value.show = false, 3000)
 }
 
-/* ================= QR ================= */
-const qrScannerVisible = ref(false)
-let html5QrCode = null
+/* ================= AUDIO ================= */
+const successSound = new Audio('/sounds/success.mp3') // taruh di public/sounds/
+
+/* ================= FORMAT TIME ================= */
+const formatTime = (t) =>
+  new Date(t).toLocaleString('id-ID', {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  })
 
 /* ================= LOAD DATA ================= */
 const loadAttendance = async () => {
-  loadingHistory.value = true
+  loading.value = true
   try {
-    const res = await axios.get(`${backendUrl}/attendance/history`)
-    attendanceHistory.value = (res.data || []).map(item => ({
-      ...item,
-      time: item.createdAt || item.updatedAt || new Date().toISOString()
-    }))
-
-    totalHadir.value = attendanceHistory.value.filter(
-      a => a.status === 'Hadir'
-    ).length
+    const res = await axios.get(`${backendUrl}/attendance/history/${siswa.value.nis}`)
+    attendanceHistory.value = res.data || []
+    totalHadir.value = attendanceHistory.value.filter(a => a.status === 'Hadir').length
   } catch {
     attendanceHistory.value = []
     totalHadir.value = 0
   } finally {
-    loadingHistory.value = false
+    loading.value = false
   }
 }
 
-/* ================= SCAN QR ================= */
-const startQrScan = async () => {
-  qrScannerVisible.value = true
-  html5QrCode = new Html5Qrcode('qr-reader')
+/* ================= QR SCAN ================= */
+const startScan = async () => {
+  qrVisible.value = true
+  scanning = false
 
-  const cameras = await Html5Qrcode.getCameras()
-  if (!cameras.length) return
+  html5QrCode = new Html5Qrcode('qr-reader')
+  const cams = await Html5Qrcode.getCameras()
+  if (!cams.length) {
+    showToast('❌ Kamera tidak tersedia', 'error')
+    return
+  }
 
   await html5QrCode.start(
-    cameras[cameras.length - 1].id,
-    { fps:10, qrbox:260 },
-    async decodedText => {
-      try {
-        await axios.patch(
-          `${backendUrl}/attendance/${decodedText}`,
-          { status:'Hadir' }
-        )
+    cams[cams.length - 1].id,
+    { fps: 12, qrbox: 300 },
+    async decoded => {
+      if (scanning) return
+      scanning = true
 
-        showToast('✅ Absensi berhasil dicatat', 'success')
+      // cek QR sesuai NIS siswa
+      if (decoded !== siswa.value.nis) {
+        showToast('❌ QR tidak valid', 'error')
+        scanning = false
+        return
+      }
+
+      try {
+        await axios.patch(`${backendUrl}/attendance/scan/${decoded}`, { nis: siswa.value.nis })
+
+        // 🔊 PLAY SOUND
+        successSound.currentTime = 0
+        successSound.play()
+
+        // 📳 GETAR
+        if (navigator.vibrate) navigator.vibrate(200)
+
+        showToast('✅ Absensi berhasil')
         await loadAttendance()
       } catch {
-        showToast('❌ Gagal mencatat absensi', 'error')
+        showToast('❌ Absensi gagal', 'error')
       }
-      stopQrScan()
+
+      stopScan()
     }
   )
 }
 
-const stopQrScan = async () => {
+const stopScan = async () => {
   if (html5QrCode) {
     await html5QrCode.stop()
     await html5QrCode.clear()
-    qrScannerVisible.value = false
   }
-}
-
-/* ================= FORMAT WAKTU ================= */
-const formatTime = time => {
-  const d = new Date(time)
-  return d.toLocaleString('id-ID', {
-    day:'2-digit',
-    month:'short',
-    year:'numeric',
-    hour:'2-digit',
-    minute:'2-digit'
-  })
+  qrVisible.value = false
 }
 
 /* ================= LIFECYCLE ================= */
 onMounted(async () => {
-  const role = localStorage.getItem('role')
-  if (!role) return router.push('/')
+  siswa.value.name = localStorage.getItem('studentName')
+  siswa.value.nis = localStorage.getItem('studentNis')
+  siswa.value.kelas = localStorage.getItem('studentClass')
 
-  guru.value.name =
-    localStorage.getItem(role === 'guru' ? 'teacherName' : 'studentName') || 'User'
-
-  guru.value.role = role.toUpperCase()
-  guru.value.mapel =
-    localStorage.getItem(role === 'guru' ? 'teacherMapel' : 'studentClass') || ''
+  if (!siswa.value.nis || localStorage.getItem('role') !== 'siswa') {
+    router.push('/login')
+    return
+  }
 
   await loadAttendance()
 })
 
-onUnmounted(stopQrScan)
+onUnmounted(stopScan)
 
 const logout = () => {
   localStorage.clear()
-  router.push('/')
+  router.push('/login')
 }
 </script>
 
 <template>
-<div class="app">
+<div class="siswa">
 
   <!-- TOAST -->
-  <div v-if="toast.show" class="toast" :class="toast.type">
-    {{ toast.message }}
-  </div>
+  <div v-if="toast.show" class="toast" :class="toast.type">{{ toast.msg }}</div>
 
   <!-- HEADER -->
   <header class="header">
-    <div class="user">
-      <div class="avatar">{{ guru.name.charAt(0) }}</div>
-      <div>
-        <h4>{{ guru.name }}</h4>
-        <small>
-          {{ guru.role }}
-          <span v-if="guru.mapel">• {{ guru.mapel }}</span>
-        </small>
-      </div>
+    <div>
+      <h3>{{ siswa.name }}</h3>
+      <small>{{ siswa.kelas }} • NIS {{ siswa.nis }}</small>
     </div>
-    <button class="logout" @click="logout">Logout</button>
+    <button @click="logout">Logout</button>
   </header>
 
   <!-- STATS -->
   <section class="stats">
-    <div class="card primary">
-      <h3>{{ totalHadir }}</h3>
+    <div class="card">
+      <h2>{{ totalHadir }}</h2>
       <p>Total Hadir</p>
     </div>
-    <div class="card success">
-      <h3>{{ attendanceHistory.length }}</h3>
-      <p>Riwayat Absensi</p>
-    </div>
+    <button class="scan" @click="startScan">📷 Scan QR Absensi</button>
   </section>
 
-  <!-- SCAN -->
-  <section class="scan">
-    <button class="scan-btn" @click="startQrScan">
-      📷 Scan QR Absensi
-    </button>
-    <div v-if="qrScannerVisible" id="qr-reader" class="qr-box"></div>
-  </section>
+  <div v-if="qrVisible" id="qr-reader" class="qr"></div>
 
   <!-- HISTORY -->
   <section class="history">
-    <h3>Riwayat Absensi</h3>
-
-    <p v-if="loadingHistory" class="loading">Memuat data...</p>
-
+    <h4>Riwayat Absensi</h4>
+    <p v-if="loading">Memuat...</p>
     <ul v-else>
-      <li v-for="(item,i) in attendanceHistory" :key="i">
-        <div>
-          <strong>{{ item.studentName || 'Siswa' }}</strong>
-          <div class="time">{{ formatTime(item.time) }}</div>
-        </div>
-        <span class="badge" :class="item.status.toLowerCase()">
-          {{ item.status }}
-        </span>
+      <li v-for="(a,i) in attendanceHistory" :key="i">
+        <span>{{ formatTime(a.createdAt) }}</span>
+        <b :class="a.status.toLowerCase()">{{ a.status }}</b>
       </li>
     </ul>
   </section>
@@ -189,133 +175,100 @@ const logout = () => {
 </template>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-
-* { font-family:'Inter',sans-serif; }
-
-.app {
+.siswa {
   min-height:100vh;
   padding:24px;
-  background:linear-gradient(135deg,#eef2ff,#f8fafc);
+  background:#f8fafc;
+  font-family:Inter,sans-serif;
 }
 
-/* TOAST */
-.toast {
-  position:fixed;
-  top:24px;
-  right:24px;
-  padding:14px 22px;
-  border-radius:14px;
-  color:white;
-  font-weight:600;
-  z-index:999;
-  animation:slide .3s ease;
-}
-.toast.success { background:#10b981; }
-.toast.error { background:#ef4444; }
-
-@keyframes slide {
-  from { transform:translateY(-20px); opacity:0 }
-  to { transform:translateY(0); opacity:1 }
-}
-
-/* HEADER */
 .header {
+  background:white;
+  padding:16px;
+  border-radius:14px;
   display:flex;
   justify-content:space-between;
   align-items:center;
-  background:white;
-  padding:16px 24px;
-  border-radius:18px;
-  box-shadow:0 10px 30px rgba(0,0,0,.08);
+  margin-bottom:20px;
+  box-shadow:0 4px 12px rgba(0,0,0,0.05);
 }
 
-.user { display:flex; gap:14px; align-items:center; }
-.avatar {
-  width:52px; height:52px;
-  border-radius:50%;
-  background:linear-gradient(135deg,#4f46e5,#6366f1);
-  color:white;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  font-size:1.3rem;
-  font-weight:700;
-}
+.header h3 { font-weight:700; font-size:1.2rem }
+.header small { color:#6b7280 }
 
-.logout {
-  background:#ef4444;
-  color:white;
-  border:none;
-  padding:10px 18px;
-  border-radius:12px;
-}
-
-/* STATS */
 .stats {
-  margin:24px 0;
-  display:grid;
-  grid-template-columns:repeat(2,1fr);
-  gap:20px;
+  display:flex;
+  gap:16px;
+  margin-bottom:20px;
+  flex-wrap:wrap;
+  align-items:center;
 }
 
 .card {
-  padding:24px;
-  border-radius:18px;
-  color:white;
-  box-shadow:0 12px 30px rgba(0,0,0,.12);
-}
-
-.primary { background:#4f46e5; }
-.success { background:#10b981; }
-
-/* SCAN */
-.scan {
-  background:white;
-  padding:24px;
-  border-radius:18px;
-  margin-bottom:24px;
-}
-
-.scan-btn {
+  flex:1;
   background:#4f46e5;
   color:white;
-  padding:12px 20px;
-  border:none;
-  border-radius:12px;
+  padding:20px;
+  border-radius:16px;
+  text-align:center;
+  box-shadow:0 4px 12px rgba(0,0,0,0.1);
 }
 
-.qr-box { margin-top:16px; max-width:340px; }
+.card h2 { font-size:2rem; font-weight:700 }
+.card p { margin-top:4px; font-weight:500 }
 
-/* HISTORY */
+.scan {
+  background:#10b981;
+  color:white;
+  border:none;
+  padding:14px;
+  border-radius:16px;
+  font-weight:600;
+  cursor:pointer;
+  min-width:180px;
+  box-shadow:0 4px 12px rgba(0,0,0,0.1);
+  transition:0.2s;
+}
+.scan:hover { transform:scale(1.05) }
+
+.qr {
+  margin:16px auto;
+  max-width:300px;
+  border-radius:16px;
+  overflow:hidden;
+}
+
 .history {
   background:white;
-  padding:24px;
-  border-radius:18px;
+  padding:16px;
+  border-radius:16px;
+  box-shadow:0 4px 12px rgba(0,0,0,0.05);
 }
+
+.history h4 { font-weight:600; margin-bottom:12px }
 
 .history li {
   display:flex;
   justify-content:space-between;
-  padding:14px 0;
+  padding:10px 0;
   border-bottom:1px solid #e5e7eb;
 }
 
-.time {
-  font-size:.75rem;
-  color:#6b7280;
-}
+.hadir { color:#10b981 }
+.izin { color:#f59e0b }
+.sakit { color:#3b82f6 }
+.alfa { color:#ef4444 }
 
-.badge {
-  padding:6px 14px;
-  border-radius:999px;
-  font-size:.75rem;
+.toast {
+  position:fixed;
+  top:20px;
+  right:20px;
+  padding:12px 20px;
+  border-radius:12px;
+  color:white;
   font-weight:600;
+  z-index:999;
 }
-.hadir { background:#d1fae5; color:#065f46; }
-.izin { background:#fef3c7; color:#92400e; }
-.sakit { background:#dbeafe; color:#1e40af; }
-.alfa { background:#fee2e2; color:#991b1b; }
-
-.loading { color:#6b7280; }
+.toast.success { background:#10b981 }
+.toast.error { background:#ef4444 }
 </style>
