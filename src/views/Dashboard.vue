@@ -23,6 +23,9 @@ const qrScannerVisible = ref(false)
 let html5QrCode = null
 const scannedNis = ref(new Set())
 
+/* ================= AUDIO ================= */
+const successSound = new Audio('/sounds/success.mp3') // ⬅️ taruh di public/sounds/
+
 /* ================= QR MODAL ================= */
 const qrModalVisible = ref(false)
 const selectedQr = ref('')
@@ -30,11 +33,13 @@ const selectedQr = ref('')
 /* ================= TOAST ================= */
 const toastVisible = ref(false)
 const toastMessage = ref('')
+const toastType = ref('success')
 
-const showToast = msg => {
+const showToast = (msg, type = 'success') => {
   toastMessage.value = msg
+  toastType.value = type
   toastVisible.value = true
-  setTimeout(() => toastVisible.value = false, 2500)
+  setTimeout(() => toastVisible.value = false, 3000)
 }
 
 /* ================= COMPUTED ================= */
@@ -91,7 +96,7 @@ const updateStatus = async (nis, status) => {
   } catch {}
 }
 
-/* ================= QR FULLSCREEN ================= */
+/* ================= QR SCAN ================= */
 const startQrScan = async () => {
   qrScannerVisible.value = true
   scannedNis.value.clear()
@@ -106,14 +111,25 @@ const startQrScan = async () => {
       { fps: 12, qrbox: 320 },
       decoded => {
         if (scannedNis.value.has(decoded)) return
+
         const student = students.value.find(s => s.nis === decoded)
-        if (!student) return
+        if (!student) {
+          showToast('❌ QR tidak valid', 'error')
+          return
+        }
 
         scannedNis.value.add(decoded)
         updateStatus(decoded, 'Hadir')
 
-        showToast(`✅ Hadir: ${student.name}`)
+        // 🔊 PLAY SOUND
+        successSound.currentTime = 0
+        successSound.play()
+
+        // 📳 GETAR
         if (navigator.vibrate) navigator.vibrate(200)
+
+        // 🔔 NOTIF
+        showToast(`✅ Absen berhasil: ${student.name}`, 'success')
       }
     )
   }, 300)
@@ -149,8 +165,7 @@ const logout = () => {
 
 /* ================= MOUNT ================= */
 onMounted(async () => {
-  const role = localStorage.getItem('role') || 'guru'
-  user.value.role = role
+  user.value.role = localStorage.getItem('role') || 'guru'
   user.value.name = localStorage.getItem('teacherName') || 'Guru'
   user.value.mapel = localStorage.getItem('teacherMapel') || 'RPL'
 
@@ -160,6 +175,7 @@ onMounted(async () => {
 
 onUnmounted(stopQrScan)
 </script>
+
 
 
 <template>
