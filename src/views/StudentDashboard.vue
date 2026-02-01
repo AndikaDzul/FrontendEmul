@@ -7,96 +7,170 @@ import axios from 'axios'
 const router = useRouter()
 const backendUrl = 'https://backend-test-n4bo.vercel.app'
 
-const siswa = ref({ name:'', nis:'', kelas:'' })
+// State
+const student = ref({
+  name: '',
+  nis: '',
+  class: ''
+})
 const history = ref([])
 const totalHadir = ref(0)
+const loading = ref(false)
+
+// QR State
 const qrVisible = ref(false)
 let html5QrCode = null
 let scanning = false
 
+// Toast
 const toast = ref({ show:false, msg:'', type:'success' })
 const showToast = (msg,type='success')=>{
   toast.value={show:true,msg,type}
   setTimeout(()=>toast.value.show=false,3000)
 }
 
-const loadHistory = async ()=>{
-  try{
-    const res = await axios.get(`${backendUrl}/attendance/history/${siswa.value.nis}`)
+// ==== LOAD DATA ====
+const loadHistory = async () => {
+  if (!student.value.nis) return
+  loading.value = true
+  try {
+    const res = await axios.get(`${backendUrl}/attendance/history/${student.value.nis}`)
     history.value = res.data
-    totalHadir.value = res.data.filter(h=>h.status==='Hadir').length
-  }catch{
-    history.value=[]
-    totalHadir.value=0
+    totalHadir.value = res.data.filter(h => h.status === 'Hadir').length
+  } catch (err) {
+    console.error('Gagal load history', err)
+    history.value = []
+  } finally {
+    loading.value = false
   }
 }
 
-const startScan = async ()=>{
-  qrVisible.value=true
-  scanning=false
+// ==== FORMAT TIME ====
+const formatTime = (dateStr) => {
+  if(!dateStr) return '-'
+  return new Date(dateStr).toLocaleString('id-ID', {
+    day: 'numeric', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  })
+}
 
-  html5QrCode = new Html5Qrcode('qr-reader')
-  const cams = await Html5Qrcode.getCameras()
-  if(!cams.length){
-    showToast('❌ Kamera tidak tersedia','error')
-    return
-  }
+// ==== QR SCAN ====
+const startScan = async () => {
+  qrVisible.value = true
+  scanning = false
 
-  await html5QrCode.start(
-    cams[0].id,
-    { fps:10, qrbox:280 },
-    async decoded=>{
-      if(scanning) return
-      scanning=true
-
-      if(decoded!==siswa.value.nis){
-        showToast('❌ QR tidak valid','error')
-        scanning=false
+  // Tunggu DOM render
+  setTimeout(async () => {
+    html5QrCode = new Html5Qrcode('qr-reader')
+    try {
+      const cams = await Html5Qrcode.getCameras()
+      if (!cams.length) {
+        showToast('❌ Kamera tidak tersedia', 'error')
+        qrVisible.value = false
         return
       }
 
-      try{
-        await axios.post(`${backendUrl}/attendance/scan`,{
-          nis: siswa.value.nis
-        })
-        showToast('✅ Absensi berhasil')
-        await loadHistory()
-      }catch{
-        showToast('❌ Sudah absen / error','error')
+      // Gunakan kamera belakang jika ada (biasanya index terakhir)
+      const cameraId = cams.length > 1 ? cams[cams.length - 1].id : cams[0].id
+
+      await html5QrCode.start(
+        cameraId,
+        { fps: 10, qrbox: 250 },
+        async (decoded) => {
+          if (scanning) return
+          
+          // Siswa scan QR apapun untuk absen
+          // Yang dikirim adalah NIS siswa yang login
+          
+          scanning = true
+          try {
+            // Kirim NIS siswa yang sedang login ke backend
+            await axios.post(`${backendUrl}/attendance/scan`, {
+              nis: student.value.nis
+            })
+            showToast('✅ Absensi Berhasil!')
+            await loadHistory()
+            
+            // Auto close setelah sukses
+            setTimeout(() => stopScan(), 1000)
+          } catch (err) {
+            const msg = err.response?.data?.message || 'Gagal absen'
+            showToast(`❌ ${msg}`, 'error')
+            scanning = false
+          }
+        },
+        (errorMessage) => {
+          // ignore parsing error
+        }
+      )
+    } catch (err) {
+      console.error('Camera error:', err)
+      
+      // Pesan error yang lebih jelas
+      if (err.name === 'NotAllowedError') {
+        showToast('❌ Izin kamera ditolak. Klik Allow/Izinkan', 'error')
+      } else if (err.name === 'NotFoundError') {
+        showToast('❌ Kamera tidak ditemukan', 'error')
+      } else if (err.name === 'NotReadableError') {
+        showToast('❌ Kamera sedang digunakan aplikasi lain', 'error')
+      } else {
+        showToast('❌ Gagal membuka kamera. Gunakan HTTPS atau localhost', 'error')
       }
-
-      stopScan()
+      
+      qrVisible.value = false
     }
-  )
+  }, 100)
 }
 
-const stopScan = async ()=>{
-  if(html5QrCode){
-    await html5QrCode.stop()
-    await html5QrCode.clear()
-    html5QrCode=null
+const stopScan = async () => {
+  if (html5QrCode) {
+    try {
+      await html5QrCode.stop()
+      await html5QrCode.clear()
+    } catch (e) { /* ignore */ }
+    html5QrCode = null
   }
-  qrVisible.value=false
+  qrVisible.value = false
 }
 
-onMounted(async ()=>{
-  siswa.value.name = localStorage.getItem('studentName')
-  siswa.value.nis = localStorage.getItem('studentNis')
-  siswa.value.kelas = localStorage.getItem('studentClass')
+// ==== MOUNT ====
+onMounted(async () => {
+  // Ambil data dari localStorage
+  const nis = localStorage.getItem('studentNis')
+  const name = localStorage.getItem('studentName')
+  const kelas = localStorage.getItem('studentClass')
+  const role = localStorage.getItem('role')
 
-  if(!siswa.value.nis || localStorage.getItem('role')!=='siswa'){
-    router.push('/login')
+  // Debug: Log data untuk troubleshooting
+  console.log('Student Data from localStorage:', { nis, name, kelas, role })
+
+  // Cek validasi
+  if (!nis || role !== 'siswa') {
+    console.error('Missing NIS or wrong role. Redirecting to login.')
+    router.replace('/login')
     return
   }
+
+  // Set state - pastikan semua field ada
+  student.value = {
+    name: name || 'Siswa',
+    nis: nis || 'N/A', // Fallback jika undefined
+    class: kelas || '-'
+  }
+
+  console.log('Student state set:', student.value)
 
   await loadHistory()
 })
 
-onUnmounted(stopScan)
+onUnmounted(() => {
+  stopScan()
+})
 
-const logout=()=>{
+// ==== LOGOUT ====
+const logout = () => {
   localStorage.clear()
-  router.push('/login')
+  router.replace('/login')
 }
 </script>
 
@@ -106,8 +180,8 @@ const logout=()=>{
   <div v-if="toast.show" class="toast" :class="toast.type">{{ toast.msg }}</div>
   <header class="header">
     <div class="info">
-      <div class="avatar">{{ siswa.name.charAt(0).toUpperCase() }}</div>
-      <div><h3>{{ siswa.name }}</h3><small>{{ siswa.kelas }} • NIS {{ siswa.nis }}</small></div>
+      <div class="avatar">{{ student.name ? student.name.charAt(0).toUpperCase() : 'S' }}</div>
+      <div><h3>{{ student.name }}</h3><small>{{ student.class }} • NIS {{ student.nis }}</small></div>
     </div>
     <button @click="logout" class="logout-btn">🚪 Logout</button>
   </header>
@@ -123,7 +197,7 @@ const logout=()=>{
     <h3>🕒 Riwayat Absensi</h3>
     <p v-if="loading">Memuat...</p>
     <ul v-else>
-      <li v-for="(h,i) in attendanceHistory" :key="i">
+      <li v-for="(h,i) in history" :key="i">
         <span>{{ formatTime(h.createdAt) }}</span>
         <b :class="h.status.toLowerCase()">{{ h.status }}</b>
       </li>
